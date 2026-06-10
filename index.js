@@ -11,7 +11,7 @@ async function checkAll() {
     COMPONENTS.map(async ({ name, url }) => {
       const startedAt = Date.now();
       try {
-        const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
+        const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3000) });
         return { name, ok: response.status < 500, ms: Date.now() - startedAt };
       } catch {
         return { name, ok: false, ms: Date.now() - startedAt };
@@ -20,21 +20,29 @@ async function checkAll() {
   );
 }
 
+let schemaReady = false;
+
 async function record(env, results) {
   if (!env.DATABASE_URL) return [];
   const sql = postgres(env.DATABASE_URL, { max: 1, ssl: "require", connect_timeout: 5 });
   try {
-    await sql`CREATE TABLE IF NOT EXISTS checks (
-      id serial PRIMARY KEY,
-      at timestamptz NOT NULL DEFAULT now(),
-      component text NOT NULL,
-      ok boolean NOT NULL,
-      ms integer NOT NULL
-    )`;
-    for (const result of results) {
-      await sql`INSERT INTO checks (component, ok, ms) VALUES (${result.name}, ${result.ok}, ${result.ms})`;
+    if (!schemaReady) {
+      await sql`CREATE TABLE IF NOT EXISTS checks (
+        id serial PRIMARY KEY,
+        at timestamptz NOT NULL DEFAULT now(),
+        component text NOT NULL,
+        ok boolean NOT NULL,
+        ms integer NOT NULL
+      )`;
+      schemaReady = true;
     }
-    return await sql`SELECT at, component, ok, ms FROM checks ORDER BY at DESC LIMIT 30`;
+    const rows = results.map((r) => ({ component: r.name, ok: r.ok, ms: r.ms }));
+    // one round trip for the writes, one for the read
+    const [history] = await Promise.all([
+      sql`SELECT at, component, ok, ms FROM checks ORDER BY at DESC LIMIT 30`,
+      sql`INSERT INTO checks ${sql(rows, "component", "ok", "ms")}`,
+    ]);
+    return history;
   } finally {
     await sql.end({ timeout: 5 });
   }
