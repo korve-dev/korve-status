@@ -22,7 +22,7 @@ async function checkAll() {
 
 async function record(env, results) {
   if (!env.DATABASE_URL) return [];
-  const sql = postgres(env.DATABASE_URL, { max: 1, ssl: "require" });
+  const sql = postgres(env.DATABASE_URL, { max: 1, ssl: "require", connect_timeout: 5 });
   try {
     await sql`CREATE TABLE IF NOT EXISTS checks (
       id serial PRIMARY KEY,
@@ -72,7 +72,10 @@ export default {
     const results = await checkAll();
     let history = [];
     try {
-      history = await record(env, results);
+      history = await Promise.race([
+        record(env, results),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("history timeout")), 6000)),
+      ]);
     } catch (error) {
       console.log(`history unavailable: ${error.message}`);
     }
