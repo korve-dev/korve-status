@@ -22,10 +22,13 @@ async function checkAll() {
 
 let schemaReady = false;
 
-async function record(env, results) {
-  if (!env.DATABASE_URL) return [];
+/** Open the session and start the history read immediately; the caller
+ * inserts this page view's results once the checks finish. The connection
+ * setup overlaps the component checks instead of following them. */
+function openHistory(env) {
+  if (!env.DATABASE_URL) return null;
   const sql = postgres(env.DATABASE_URL, { max: 1, ssl: "require", connect_timeout: 5 });
-  try {
+  const ready = (async () => {
     if (!schemaReady) {
       await sql`CREATE TABLE IF NOT EXISTS checks (
         id serial PRIMARY KEY,
@@ -36,16 +39,22 @@ async function record(env, results) {
       )`;
       schemaReady = true;
     }
-    const rows = results.map((r) => ({ component: r.name, ok: r.ok, ms: r.ms }));
-    // one round trip for the writes, one for the read
-    const [history] = await Promise.all([
-      sql`SELECT at, component, ok, ms FROM checks ORDER BY at DESC LIMIT 30`,
-      sql`INSERT INTO checks ${sql(rows, "component", "ok", "ms")}`,
-    ]);
-    return history;
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
+    return sql`SELECT at, component, ok, ms FROM checks ORDER BY at DESC LIMIT 30`;
+  })();
+  return {
+    history: ready,
+    async finish(results) {
+      try {
+        const rows = results.map((r) => ({ component: r.name, ok: r.ok, ms: r.ms }));
+        await sql`INSERT INTO checks ${sql(rows, "component", "ok", "ms")}`;
+      } finally {
+        await sql.end({ timeout: 5 });
+      }
+    },
+    async abort() {
+      await sql.end({ timeout: 5 });
+    },
+  };
 }
 
 function render(results, history) {
@@ -77,15 +86,18 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ ok: true });
+    const session = openHistory(env);
     const results = await checkAll();
     let history = [];
     try {
       history = await Promise.race([
-        record(env, results),
+        session ? session.history : Promise.resolve([]),
         new Promise((_, reject) => setTimeout(() => reject(new Error("history timeout")), 6000)),
       ]);
+      if (session) await session.finish(results);
     } catch (error) {
       console.log(`history unavailable: ${error.message}`);
+      if (session) await session.abort().catch(() => {});
     }
     console.log(`status check: ${results.filter((r) => r.ok).length}/${results.length} ok`);
     return new Response(render(results, history), { headers: { "content-type": "text/html" } });
