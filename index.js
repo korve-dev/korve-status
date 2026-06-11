@@ -66,7 +66,7 @@ function render(results, history) {
         `<td class="${row.ok ? "ok" : "down"}">${row.ok ? "operational" : "down"}</td><td>${row.ms}ms</td></tr>`,
     )
     .join("");
-  return `<!doctype html><html><head><title>Korve status</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Korve status</title><style>
     body{font-family:ui-monospace,monospace;background:#000;color:#eee;max-width:720px;margin:48px auto;padding:0 16px}
     h1{font-size:20px} .badge{padding:4px 10px;border-radius:6px;font-size:13px}
     .up{background:#052e16;color:#4ade80}.bad{background:#450a0a;color:#f87171}
@@ -100,6 +100,6 @@ export default {
       if (session) await session.abort().catch(() => {});
     }
     console.log(`status check: ${results.filter((r) => r.ok).length}/${results.length} ok`);
-    return new Response(render(results, history), { headers: { "content-type": "text/html" } });
+    return new Response(render(results, history), { headers: { "content-type": "text/html; charset=utf-8" } });
   },
 };
